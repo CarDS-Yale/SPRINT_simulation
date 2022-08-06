@@ -131,7 +131,7 @@ base <- base[,-c(1,2)]
 base <- base[colSums(is.na(base))/nrow(base)<0.1]
 
 # missing data imputation
-imputed <- missRanger(base, maxiter=1L)
+imputed <- missRanger(base)
 
 # we preprocess the names using the clean_names function of the janitor package
 imputed <- clean_names(imputed)
