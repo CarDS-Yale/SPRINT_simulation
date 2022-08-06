@@ -36,7 +36,7 @@ The working directory/path should be adjusted to match the local path to the SPR
 ```{r}
 
 # set the working directory to the file containing all the original .csv files
-mypath = "/Users/evangelos.oikonomou/Box/Evan Rohan shared folder/Datasets/All datasets/"
+# mypath = ### set mypath to the local path leading to the SPRINT data
 setwd(file.path(mypath, "SPRINT_2021a/SPRINT/data/CSV"))
 
 ## Baseline blood pressure measurements
