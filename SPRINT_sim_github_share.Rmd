@@ -1,0 +1,249 @@
+---
+title: "Introducing simulations of heterogeneous treatments effects using the SPRINT population"
+author: "CarDS Lab @Yale; Oikonomou EK, Khera R et al"
+date: "8/6/2022"
+output:
+  html_document: default
+---
+
+## Introduction
+This is R code to create a reproducible dataset from the BioLINCC SPRINT dataset for simulation analyses.
+First, we will load the required libraries that we will use for preprocessing.
+We also need to set a random seed number to ensure reproducibility (at the level of the imputation)
+
+```{r}
+# clean the environment
+rm(list=ls()) 
+
+# load the required libraries that we will use for preprocessing
+library(plyr)
+library(dplyr)
+library(missRanger)
+library(Hmisc)
+library(janitor)
+library(simsurv)
+library(Publish)
+library(survival)
+
+# set a random seed
+set.seed(123)
+```
+
+## Creating the dataset of baseline features
+Next, for every file of interest, we will load the respective csv file and extract the information of interest.
+The working directory/path should be adjusted to match the local path to the SPRINT data.
+
+```{r}
+
+# set the working directory to the file containing all the original .csv files
+mypath = "/Users/evangelos.oikonomou/Box/Evan Rohan shared folder/Datasets/All datasets/"
+setwd(file.path(mypath, "SPRINT_2021a/SPRINT/data/CSV"))
+
+## Baseline blood pressure measurements
+basebp <- read.csv("bp_manage_base.csv", header = TRUE, sep =",", na.strings=".") # baseline bp
+basebp <- basebp %>% select("MASKID", "SEATSYS", "SEATDIAST", "SEATHEART", "STANDSYS", "STANDDIAST", "STANDHEART", "DIZZY")
+basebp$SYS_CHANGE <- basebp$SEATSYS-basebp$STANDSYS
+basebp$DIAST_CHANGE <- basebp$SEATDIAST-basebp$STANDDIAST
+basebp$HR_CHANGE <- basebp$SEATHEART-basebp$STANDHEART
+basebp[-c(1, 8)] <- lapply(basebp[-c(1,8)], as.numeric)
+basebp[c(1, 8)] <- lapply(basebp[c(1,8)], as.factor)
+
+## medical history
+history <- read.csv("bl_history.csv", header = TRUE, sep =",", na.strings=".") # history
+history <- history %>% select("MASKID",
+                              "ATRIALFIB", "ANGINA", "HEARTATT", "CONHEARTFAIL", "IRRHEARTBEAT", 
+                              "OSTEOARTHRITIS", "RHEARTHRITIS", "GOUT", "OTHARTHRITIS", 
+                              "HIPPROB", 
+                              "CANCER", "SKINCANCER", "PVD", "SEIZURE", "STROKE", "TIA", 
+                              "THYROIDDIS", "ANEMIA", "DIABETES", "HYPERTENS", "LOWBKPAIN", 
+                              "ALCOHOL",
+                              "FAMHST", "FAMHST55", 
+                              "VIGACTIV")
+
+history$FAMHST <- ifelse(history$FAMHST==2, NA, history$FAMHST) # define missing values
+history$FAMHST55 <- ifelse(history$FAMHST55==2, NA, history$FAMHST55) # define missing values
+
+history[2:26] <- lapply(history[2:26], factor) # factorize all selected variables
+
+## Cognitive testing
+mind <- read.csv("bl_mindscreening.csv", header = TRUE, sep =",", na.strings=".") # mind
+mind <- mind %>% select("MASKID", "MOCA_SCORE", "DSC_TOTAL")
+mind[2:3] <- lapply(mind[2:3], as.numeric)
+
+## Electrocardiograms
+ecg <- read.csv("ecg.csv", header = TRUE, sep =",", na.strings=".") # ecg
+ecg <- ecg %>% filter(INCI_MC=="")
+ecg <- ecg %>% group_by(MASKID) %>% filter(row_number()==1)
+ecg <- ecg %>% select("MASKID", "QRSDURATION",
+                      "AFIBFLUTTER",
+                      "CV", "CVP", "SL", 
+                      "LVHANY3")   
+ecg[-c(1, 3, 7)] <- lapply(ecg[-c(1, 3, 7)], as.numeric)
+ecg[c(1, 3, 7)] <- lapply(ecg[c(1, 3, 7)], as.factor)
+
+## Inclusion/excusion criteria
+inclexcl <- read.csv("incl_excl.csv", header = TRUE, sep =",", na.strings=".") # inclusion/exclusion
+inclexcl <- inclexcl %>% select("MASKID",         
+                                "MYOCARDINFARC", "ACUTECORSYND", "CORONARYREVAS", "CAROTID", "PADREVAS", "STENOSIS50", "AAA5REPAIR",
+                                "CALCSCORE400", "LOWABI90", 
+                                "UNABLETOSTAND",
+                                "CVDPOINTS")
+inclexcl[-c(12)] <- lapply(inclexcl[-c(12)], factor)
+inclexcl[c(12)] <- lapply(inclexcl[c(12)], as.numeric)
+inclexcl$UNABLETOSTAND <- as.factor(ifelse(is.na(inclexcl$UNABLETOSTAND), 0, 1))
+
+## Laboratory assessment
+labs <- read.csv("labs.csv", header = TRUE, sep =",", na.strings=".") # labs
+labs <- labs %>% filter(VISITCODE=="RZ1")
+labs <- labs %>% select("MASKID", "RESULT_BUN", "RESULT_CHR", "RESULT_CL", "RESULT_CO2", "RESULT_CRDUR", "RESULT_GLUR", "RESULT_HDL", "RESULT_K", "RESULT_LDLR",
+                        "RESULT_NA", "RESULT_TRR", "RESULT_UMALCR", "RESULT_UMALI", "RESULT_CREATR", "RESULT_GFR")
+labs[-c(1)] <- lapply(labs[-c(1)], as.numeric)
+
+## General self-reported health assessment
+myhealth <- read.csv("my_health.csv", header = TRUE, sep =",", na.strings=".") # myhealth
+myhealth <- myhealth %>% filter(VISITCODE=="RZ2")
+myhealth <- myhealth %>% select("MASKID", "GEN_HEALTH", "FAINT")
+myhealth[-c(2)] <- lapply(myhealth[-c(2)], as.factor)
+myhealth[c(2)] <- lapply(myhealth[c(2)], as.numeric)
+
+# load selected files from POP
+setwd(file.path(mypath, "SPRINT_2021a/SPRINT-POP/data"))
+baseline <- read.csv("baseline.csv", header = TRUE, sep =",", na.strings=".") # baseline
+baseline <- baseline %>% select("MASKID", "INTENSIVE", "AGE", "FEMALE", "RACE4", "BMI", "N_AGENTS", "NOAGENTS", "SMOKE_3CAT", "ASPIRIN", "STATIN", "SUB_CVD", "SUB_CKD")
+baseline$SMOKE_3CAT <- ifelse(baseline$SMOKE_3CAT==4, NA, baseline$SMOKE_3CAT)
+baseline[c(3, 6, 7)] <- lapply(baseline[c(3,6,7)], as.numeric)
+baseline[-c(3, 6, 7)] <- lapply(baseline[-c(3,6,7)], as.factor)
+```
+
+## Baseline data imputation
+We will combine the data and then imputed missing values using chained random forests with predictive mean matching deployed within the missRanger package. Prior to imputation we can exlclude variables with greater than e.g. 10% missing data.
+
+```{r}
+## Base(line) phenotypes
+base <- join_all(list(baseline, inclexcl, history, myhealth, basebp, labs, ecg, mind), by='MASKID', type='left')
+arm <- base$INTENSIVE
+MASKID <- base$MASKID
+base <- base[,-c(1,2)]
+
+# Impute missing data
+
+# keep only variables with e.g. <10% missing data
+base <- base[colSums(is.na(base))/nrow(base)<0.1]
+
+# missing data imputation
+imputed <- missRanger(base, maxiter=1L)
+
+# we preprocess the names using the clean_names function of the janitor package
+imputed <- clean_names(imputed)
+```
+
+## Introducing heterogeneous treatment effects (HTE)
+Now we will introduce a ground truth for HTE. For this, we use the method proposed in the study: https://trialsjournal.biomedcentral.com/articles/10.1186/s13063-018-2774-5
+This based on the code availabe through: https://github.com/joerigdon/HTE.
+
+First, a function is defined to create a multinomial distribution for a given variable with defined probabilities.
+
+```{r}
+rmulti = function(prob, n) {
+  as.numeric(rMultinom(probs=matrix(prob, 1, length(prob)), m=n))
+}
+```
+
+## Defining groups with HTE.
+Next, we will define responders for the HTE. e.g. we assume that women on aspirin are responders to the treatment.
+
+```{r}
+## Define responders and non-responders for the HTE
+imputed$delta = NA #simulate delta
+responder = c(imputed$female==1 & imputed$aspirin==1)
+nonresponder = c(imputed$female!=1 | imputed$aspirin!=1)
+```
+
+## Defining the size of the HTE.
+We then need to introduce the expected effect size among "responders" and "non-responders".
+For instance, if there is HTE in our population; the effect can be introduced with the following code:
+
+```{r}
+## (i) Simulation for HTE
+imputed$delta[responder] = rmulti(c(0.09, 0.88, 0.03), length(imputed$delta[responder]))-2
+mean(imputed$delta[responder]) 
+
+imputed$delta[nonresponder] = rmulti(c(0.06, 0.88, 0.06), length(imputed$delta[nonresponder]))-2
+mean(imputed$delta[nonresponder])
+
+```
+
+Alternatively, in the absence of HTE, the code can look like this:
+
+```{r}
+## (ii) Simulation without HTE
+imputed$delta = rmulti(c(0.065, 0.88, 0.055), length(imputed$delta))-2
+mean(imputed$delta) 
+```
+
+The average ATE (avrage treatment effect) in the population can be estimated with the following code:
+
+```{r}
+mean(imputed$delta)
+```
+
+Next, we need to create the simulated treatment and outcome variables;
+
+Z: study arm (0: control, 1: intervention)
+Y1: potential adverse medical event when randomized to treatment
+Y0: potential adverse medical event when randomized to placebo
+Y: the outcome for each individual was calculated as: Z ? Y1 + (1 ? Z) ? Y0 
+
+```{r}
+## Now we will create the treatment and outcome variables
+imputed$Y1 = NA
+imputed$Y0 = NA
+imputed$Y1[imputed$delta==-1] = 0
+imputed$Y0[imputed$delta==-1] = 1
+imputed$Y1[imputed$delta==1] = 1
+imputed$Y0[imputed$delta==1] = 0
+imputed$Y1[imputed$delta==0] = 0
+imputed$Y0[imputed$delta==0] = 0
+sum((imputed$Y1-imputed$Y0)!=imputed$delta) #they all equal delta
+mean(imputed$Y1-imputed$Y0) # as specified above for ATE
+mean(imputed$delta)
+mean(imputed$Y1)
+mean(imputed$Y0)
+
+##Add in rowname
+imputed$id = paste(rownames(imputed))
+
+##Change types where necessary
+imputed$delta = factor(imputed$delta)
+imputed$Y1 = factor(imputed$Y1)
+imputed$Y0 = factor(imputed$Y0)
+```
+
+We also need to create random treatment allocation and random events times - in this case we assume a Gompertz distribution:
+
+```{r}
+covs <- data.frame(id = 1:nrow(imputed), trt = stats::rbinom(nrow(imputed), 1L, 0.5))
+s2 <- simsurv(dist = "gompertz", lambdas = 0.1, gammas = 0.05, x = covs)
+imputed$Z <- covs$trt
+
+imputed$Y = NA
+imputed$Y[imputed$Z==1] = imputed$Y1[imputed$Z==1]
+imputed$Y[imputed$Z==0] = imputed$Y0[imputed$Z==0]
+imputed$Y = imputed$Y-1
+imputed$TIME <- s2$eventtime
+```
+
+We can check the data to confirm the presence of HTE:
+
+```{r}
+# identifying factors for analysis
+imputed$Z <- as.factor(imputed$Z)
+imputed$group <- as.factor(ifelse((responder), "responder", "non-responder"))
+
+# fitting cox regression model
+fit <- coxph(Surv(TIME, Y) ~ Z + group, data=imputed)
+fit
+sub_cox <- subgroupAnalysis(fit, data=imputed, treatment="Z", subgroups=c("group"))
+sub_cox
+plot(sub_cox)
+```
